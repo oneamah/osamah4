@@ -54,16 +54,32 @@ jobs:
             return
           }
 
+          $chocoPath = "C:\ProgramData\chocolatey\lib\kustomize\tools\kustomize.exe"
+          if (Test-Path $chocoPath) {
+            $env:PATH = "$(Split-Path $chocoPath);$env:PATH"
+            return
+          }
+
           if (Get-Command choco -ErrorAction SilentlyContinue) {
-            choco install kustomize -y --ignore-installed
-            $exitCode = $LASTEXITCODE
-            if ($exitCode -ne 0 -and -not (Get-Command kustomize -ErrorAction SilentlyContinue)) {
-              exit $exitCode
+            $installed = choco list --local-only --exact kustomize | Select-String -Pattern '^kustomize\s'
+            if (-not $installed) {
+              choco install kustomize -y
             }
           } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
             winget install --id Kubernetes.kustomize --accept-package-agreements --accept-source-agreements
           } else {
             Write-Error "kustomize not found and no package manager available."
+            exit 1
+          }
+
+          if (-not (Get-Command kustomize -ErrorAction SilentlyContinue)) {
+            if (Test-Path $chocoPath) {
+              $env:PATH = "$(Split-Path $chocoPath);$env:PATH"
+            }
+          }
+
+          if (-not (Get-Command kustomize -ErrorAction SilentlyContinue)) {
+            Write-Error "kustomize install completed but executable not found."
             exit 1
           }
 
