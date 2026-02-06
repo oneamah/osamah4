@@ -54,7 +54,12 @@ jobs:
             return
           }
 
+          $chocoBin = Join-Path $env:ChocolateyInstall "bin\kustomize.exe"
           $chocoPath = "C:\ProgramData\chocolatey\lib\kustomize\tools\kustomize.exe"
+          if (Test-Path $chocoBin) {
+            $env:PATH = "$(Split-Path $chocoBin);$env:PATH"
+            return
+          }
           if (Test-Path $chocoPath) {
             $env:PATH = "$(Split-Path $chocoPath);$env:PATH"
             return
@@ -73,7 +78,9 @@ jobs:
           }
 
           if (-not (Get-Command kustomize -ErrorAction SilentlyContinue)) {
-            if (Test-Path $chocoPath) {
+            if (Test-Path $chocoBin) {
+              $env:PATH = "$(Split-Path $chocoBin);$env:PATH"
+            } elseif (Test-Path $chocoPath) {
               $env:PATH = "$(Split-Path $chocoPath);$env:PATH"
             }
           }
