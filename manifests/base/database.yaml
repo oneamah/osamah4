@@ -1,0 +1,292 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+  namespace: database
+type: Opaque
+data:
+  root-password: cGFzc3dvcmQ=
+  database-name: bXlzcWw=
+  username: dXNlcg==
+  user-password: cGFzc3dvcmQ=
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mysql-sa
+  namespace: database
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mysql-secret-reader
+  namespace: database
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mysql-secret-reader-binding
+  namespace: database
+subjects:
+- kind: ServiceAccount
+  name: mysql-sa
+  namespace: database
+roleRef:
+  kind: Role
+  name: mysql-secret-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-config
+  namespace: database
+data:
+  my.cnf: |
+    [mysqld]
+    sql_mode=STRICT_TRANS_TABLES
+    max_connections=200
+    table_open_cache=400
+    time_zone=UTC
+
+    # timeouts (recommended)
+    wait_timeout=300
+    interactive_timeout=300
+    connect_timeout=10
+
+    # performance / reliability (optional)
+    skip-host-cache
+    skip-name-resolve
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-initdb-scripts
+  namespace: database
+data:
+  init.sql: |
+    CREATE DATABASE IF NOT EXISTS mydb;
+    USE mydb;
+
+    CREATE TABLE IF NOT EXISTS users (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      username VARCHAR(50) NOT NULL UNIQUE,
+      email VARCHAR(100) NOT NULL UNIQUE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO users (username, email) VALUES
+      ('admin', 'admin@example.com');
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: database
+  namespace: database
+spec:
+  serviceAccountName: mysql-sa
+  serviceName: mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: database
+  template:
+    metadata:
+      labels:
+        app: database
+    spec:
+      volumes:
+      - name: mysql-config
+        configMap:
+          name: mysql-config
+          items:
+            - key: my.cnf
+              path: my.cnf
+
+      - name: mysql-init-scripts
+        configMap:
+          name: mysql-init-scripts
+          items:
+            - key: init.sql
+              path: init.sql
+      containers:
+      - name: mysql
+        image: mysql:8.0.45-debian
+        ports:
+          - containerPort: 3306
+        resources:
+          limits:
+            cpu: "1"
+            memory: "512Mi"
+          requests:
+            cpu: "500m"
+            memory: "256Mi"
+        env:
+          - name: MYSQL_ROOT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: mysql-secret
+                key: root-password
+          - name: MYSQL_DATABASE
+            valueFrom:
+              secretKeyRef:
+                name: mysql-secret
+                key: database-name
+          - name: MYSQL_USER
+            valueFrom:
+              secretKeyRef:
+                name: mysql-secret
+                key: username
+          - name: MYSQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: mysql-secret
+                key: user-password
+        volumeMounts:
+          - name: mysql-data
+            mountPath: /var/lib/mysql
+          - name: mysql-config
+            mountPath: /etc/mysql/conf.d
+          - name: mysql-init-scripts
+            mountPath: /docker-entrypoint-initdb.d
+        readinessProbe:
+          exec:
+            command: ["mysqladmin", "ping", "-h", "localhost"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          exec:
+            command: ["mysqladmin", "ping", "-h", "localhost"]
+          initialDelaySeconds: 60
+          periodSeconds: 20
+          timeoutSeconds: 5
+          failureThreshold: 3
+  volumeClaimTemplates:
+  - metadata:
+      name: mysql-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: database
+spec:
+  selector:
+    app: database
+  ports:
+    - protocol: TCP
+      port: 3306
+      targetPort: 3306
+  type: ClusterIP
+  clusterIP: None
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: database-limits
+  namespace: database
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: "500m"
+      memory: "256Mi"
+    defaultRequest:
+      cpu: "500m"
+      memory: "256Mi"
+    max:
+      cpu: "1"
+      memory: "512Mi"
+    min:
+      cpu: "250m"
+      memory: "128Mi"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: database-pod-limits
+  namespace: database
+spec:
+  limits:
+  - type: Pod
+    max:
+      cpu: "1"
+      memory: "512Mi"
+    min:
+      cpu: "300m"
+      memory: "192Mi"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: database-quota
+  namespace: database
+spec:
+  hard:
+    requests.cpu: "1"
+    requests.memory: "512Mi"
+    limits.cpu: "2"
+    limits.memory: "1Gi"
+    pods: "5"
+    services: "2"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mysql-backup
+  namespace: database
+spec:
+  schedule: "0 2 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: mysql:8.0.45-debian
+            resources:
+              limits:
+                cpu: "250m"
+                memory: "256Mi"
+              requests:
+                cpu: "100m"
+                memory: "128Mi"
+            env:
+              - name: MYSQL_PWD
+                valueFrom:
+                  secretKeyRef:
+                    name: mysql-secret
+                    key: root-password
+            command:
+              - sh
+              - -c
+              - |
+                mysqldump -h mysql.database.svc.cluster.local -u root mydb > /backup/mydb-$(date +%F).sql
+            volumeMounts:
+              - name: backup
+                mountPath: /backup
+          restartPolicy: OnFailure
+          volumes:
+          - name: backup
+            emptyDir: {}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: database-pdb
+  namespace: database
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: database

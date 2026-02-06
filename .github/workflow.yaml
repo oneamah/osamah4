@@ -1,0 +1,128 @@
+name: Deploy Full Stack (Matrix)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Select environment to deploy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - env: dev
+            kubeconfig_secret: KUBE_CONFIG_DEV
+          - env: staging
+            kubeconfig_secret: KUBE_CONFIG_STAGING
+          - env: prod
+            kubeconfig_secret: KUBE_CONFIG_PROD
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push backend image
+        env:
+          ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+        run: |
+          docker build -t $ECR_REGISTRY/my-backend:${{ matrix.env }} backend
+          docker push $ECR_REGISTRY/my-backend:${{ matrix.env }}
+
+      - name: Build and push frontend image
+        env:
+          ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+        run: |
+          docker build -t $ECR_REGISTRY/my-frontend:${{ matrix.env }} frontend
+          docker push $ECR_REGISTRY/my-frontend:${{ matrix.env }}
+
+      - name: Set up kustomize
+        uses: imranismail/setup-kustomize@v2
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          printf '%s' "${{ secrets[matrix.kubeconfig_secret] }}" > $HOME/.kube/config
+
+      - name: Detect changed services
+        id: changes
+        run: |
+          echo "Checking git diff..."
+          git fetch --no-tags --prune --depth=1 origin main
+
+          # Detect changes in manifest files (base or overlay overrides)
+          CHANGED_DB=$(git diff --name-only HEAD origin/main | grep -E '^manifests/(base|overlays/.*/overrides)/database.yaml' | wc -l)
+          CHANGED_BACKEND=$(git diff --name-only HEAD origin/main | grep -E '^manifests/(base|overlays/.*/overrides)/backend.yaml' | wc -l)
+          CHANGED_FRONTEND=$(git diff --name-only HEAD origin/main | grep -E '^manifests/(base|overlays/.*/overrides)/frontend.yaml' | wc -l)
+          CHANGED_ANY=$(git diff --name-only HEAD origin/main | grep -E '^manifests/' | wc -l)
+
+          echo "db=$CHANGED_DB" >> $GITHUB_OUTPUT
+          echo "backend=$CHANGED_BACKEND" >> $GITHUB_OUTPUT
+          echo "frontend=$CHANGED_FRONTEND" >> $GITHUB_OUTPUT
+          echo "any=$CHANGED_ANY" >> $GITHUB_OUTPUT
+
+      - name: Deploy Namespace
+        if: always()
+        run: |
+          kubectl apply -f manifests/base/namespace.yaml
+
+      - name: Deploy Manifests
+        if: steps.changes.outputs.any != '0'
+        run: |
+          kustomize edit set image my-backend=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/my-backend:${{ matrix.env }}
+          kustomize edit set image my-frontend=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/my-frontend:${{ matrix.env }}
+          kubectl apply -k .
+        working-directory: manifests/overlays/${{ matrix.env }}
+
+      - name: Deploy Database
+        if: steps.changes.outputs.db != '0'
+        run: |
+          kubectl rollout status statefulset/database --namespace=database
+
+      - name: Wait for DB readiness
+        if: steps.changes.outputs.db != '0'
+        run: |
+          kubectl wait --for=condition=ready pod -l app=database --namespace=database --timeout=300s
+
+      - name: Deploy Backend
+        if: steps.changes.outputs.backend != '0' || steps.changes.outputs.db != '0'
+        run: |
+          kubectl rollout status deployment/backend-deployment --namespace=backend
+
+      - name: Deploy Frontend
+        if: steps.changes.outputs.frontend != '0' || steps.changes.outputs.backend != '0'
+        run: |
+          kubectl rollout status deployment/frontend-deployment --namespace=frontend
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f $HOME/.kube/config

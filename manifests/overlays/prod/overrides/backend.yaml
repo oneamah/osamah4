@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-deployment
+  namespace: backend
+spec:
+  replicas: 3
+  template:
+    spec:
+      nodeSelector:
+        role: db
+        env: prod
+      tolerations:
+      - key: dedicated
+        operator: Equal
+        value: database
+        effect: NoSchedule
+      containers:
+      - name: backend
+        resources:
+          limits:
+            cpu: "1500m"
+            memory: "1Gi"
+          requests:
+            cpu: "750m"
+            memory: "512Mi"
