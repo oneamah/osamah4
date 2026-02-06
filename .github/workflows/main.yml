@@ -93,12 +93,10 @@ jobs:
           "any=$CHANGED_ANY" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Deploy Namespace
-        if: steps.changes.outputs.any != '0'
         run: |
           kubectl apply -f manifests/base/namespace.yaml
 
       - name: Deploy Manifests
-        if: steps.changes.outputs.any != '0'
         run: |
           kustomize edit set image my-backend=my-backend:${{ matrix.env }}
           kustomize edit set image my-frontend=my-frontend:${{ matrix.env }}
@@ -106,12 +104,10 @@ jobs:
         working-directory: manifests/overlays/${{ matrix.env }}
 
       - name: Deploy Database
-        if: steps.changes.outputs.db != '0'
         run: |
           kubectl rollout status statefulset/database --namespace=database
 
       - name: Wait for DB readiness
-        if: steps.changes.outputs.db != '0'
         run: |
           kubectl wait --for=condition=ready pod -l app=database --namespace=database --timeout=300s
 
