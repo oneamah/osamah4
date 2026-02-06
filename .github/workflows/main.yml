@@ -47,6 +47,46 @@ jobs:
             exit 1
           }
 
+      - name: Install kustomize
+        shell: pwsh
+        run: |
+          if (Get-Command kustomize -ErrorAction SilentlyContinue) {
+            return
+          }
+
+          if (Get-Command choco -ErrorAction SilentlyContinue) {
+            choco install kustomize -y --ignore-installed
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0 -and -not (Get-Command kustomize -ErrorAction SilentlyContinue)) {
+              exit $exitCode
+            }
+          } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+            winget install --id Kubernetes.kustomize --accept-package-agreements --accept-source-agreements
+          } else {
+            Write-Error "kustomize not found and no package manager available."
+            exit 1
+          }
+
+      - name: Install kubectl
+        shell: pwsh
+        run: |
+          if (Get-Command kubectl -ErrorAction SilentlyContinue) {
+            return
+          }
+
+          if (Get-Command choco -ErrorAction SilentlyContinue) {
+            choco install kubernetes-cli -y --ignore-installed
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0 -and -not (Get-Command kubectl -ErrorAction SilentlyContinue)) {
+              exit $exitCode
+            }
+          } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+            winget install --id Kubernetes.kubectl --accept-package-agreements --accept-source-agreements
+          } else {
+            Write-Error "kubectl not found and no package manager available."
+            exit 1
+          }
+
       - name: Use local kubeconfig
         shell: pwsh
         run: |
@@ -121,6 +161,3 @@ jobs:
         run: |
           kubectl rollout status deployment/frontend-deployment --namespace=frontend
 
-      - name: Cleanup kubeconfig
-        if: always() && steps.kubeconfig.outputs.created == 'true'
-        run: Remove-Item -Path $HOME/.kube/config -Force -ErrorAction SilentlyContinue
