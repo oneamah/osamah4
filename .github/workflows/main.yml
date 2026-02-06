@@ -54,11 +54,11 @@ jobs:
           }
 
           if (Get-Command choco -ErrorAction SilentlyContinue) {
-            $installed = choco list --local-only --exact kustomize | Select-String -Pattern '^kustomize\s'
-            if ($installed) {
-              return
-            }
             choco install kustomize -y
+            $exit = $LASTEXITCODE
+            if ($exit -ne 0 -and -not (Get-Command kustomize -ErrorAction SilentlyContinue)) {
+              exit $exit
+            }
           } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
             winget install --id Kubernetes.kustomize --accept-package-agreements --accept-source-agreements
           } else {
