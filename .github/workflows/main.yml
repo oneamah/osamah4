@@ -50,7 +50,7 @@ jobs:
       - name: Use local kubeconfig
         shell: pwsh
         run: |
-          $configPath = "C:\Users\oneam\.kube\config"
+          $configPath = Join-Path $env:USERPROFILE ".kube\config"
           if (-not (Test-Path $configPath)) {
             Write-Error "Kubeconfig not found at $configPath"
             exit 1
