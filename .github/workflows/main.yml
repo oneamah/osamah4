@@ -48,20 +48,20 @@ jobs:
           }
 
       - name: Install kustomize
+        shell: pwsh
         run: |
           if (Get-Command kustomize -ErrorAction SilentlyContinue) {
+            Write-Host "kustomize already installed"
             return
           }
 
           if (Get-Command choco -ErrorAction SilentlyContinue) {
-            choco install kustomize -y
-            $exit = $LASTEXITCODE
-            if ($exit -ne 0 -and -not (Get-Command kustomize -ErrorAction SilentlyContinue)) {
-              exit $exit
-            }
-          } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+            choco install kustomize -y --ignore-installed
+          }
+          elseif (Get-Command winget -ErrorAction SilentlyContinue) {
             winget install --id Kubernetes.kustomize --accept-package-agreements --accept-source-agreements
-          } else {
+          }
+          else {
             Write-Error "kustomize not found and no package manager available."
             exit 1
           }
