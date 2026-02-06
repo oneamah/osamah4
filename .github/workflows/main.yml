@@ -49,15 +49,20 @@ jobs:
 
       - name: Install kustomize
         run: |
-          if (-not (Get-Command kustomize -ErrorAction SilentlyContinue)) {
-            if (Get-Command choco -ErrorAction SilentlyContinue) {
+          if (Get-Command kustomize -ErrorAction SilentlyContinue) {
+            return
+          }
+
+          if (Get-Command choco -ErrorAction SilentlyContinue) {
+            $installed = choco list --local-only kustomize | Select-String -Pattern '^kustomize\s'
+            if (-not $installed) {
               choco install kustomize -y
-            } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
-              winget install --id Kubernetes.kustomize --accept-package-agreements --accept-source-agreements
-            } else {
-              Write-Error "kustomize not found and no package manager available."
-              exit 1
             }
+          } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+            winget install --id Kubernetes.kustomize --accept-package-agreements --accept-source-agreements
+          } else {
+            Write-Error "kustomize not found and no package manager available."
+            exit 1
           }
 
       - name: Install kubectl
