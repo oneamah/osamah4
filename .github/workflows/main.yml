@@ -47,6 +47,16 @@ jobs:
             exit 1
           }
 
+      - name: Use local kubeconfig
+        shell: pwsh
+        run: |
+          $configPath = "C:\Users\oneam\.kube\config"
+          if (-not (Test-Path $configPath)) {
+            Write-Error "Kubeconfig not found at $configPath"
+            exit 1
+          }
+          "KUBECONFIG=$configPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Detect changed services
         id: changes
         run: |
