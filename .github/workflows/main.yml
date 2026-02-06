@@ -1,0 +1,134 @@
+name: Deploy Full Stack (Matrix)
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, osamah4]
+    if: github.event_name != 'pull_request'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - env: dev
+            kubeconfig_secret: KUBE_CONFIG_DEV
+          - env: staging
+            kubeconfig_secret: KUBE_CONFIG_STAGING
+          - env: prod
+            kubeconfig_secret: KUBE_CONFIG_PROD
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Build and push backend image
+        run: |
+          docker build -t my-backend:${{ matrix.env }} backend
+
+      - name: Build and push frontend image
+        run: |
+          docker build -t my-frontend:${{ matrix.env }} frontend
+
+      - name: Verify local images exist
+        run: |
+          if (-not (docker image inspect my-backend:${{ matrix.env }} 2>$null)) {
+            Write-Error "Missing local image: my-backend:${{ matrix.env }}"
+            exit 1
+          }
+
+          if (-not (docker image inspect my-frontend:${{ matrix.env }} 2>$null)) {
+            Write-Error "Missing local image: my-frontend:${{ matrix.env }}"
+            exit 1
+          }
+
+      - name: Set up kustomize
+        uses: imranismail/setup-kustomize@v2
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Configure kubeconfig
+        run: |
+          New-Item -ItemType Directory -Path $HOME/.kube -Force | Out-Null
+          $content = "${{ secrets[matrix.kubeconfig_secret] }}"
+          Set-Content -Path $HOME/.kube/config -Value $content -NoNewline
+
+      - name: Detect changed services
+        id: changes
+        run: |
+          Write-Host "Checking git diff..."
+
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            $changedFiles = @('backend/force-deploy', 'frontend/force-deploy', 'manifests/force-deploy')
+          } else {
+            $before = "${{ github.event.before }}"
+            $after = "${{ github.sha }}"
+
+            if ([string]::IsNullOrWhiteSpace($before) -or $before -eq '0000000000000000000000000000000000000000') {
+              $changedFiles = git diff --name-only "$after^" $after
+            } else {
+              $changedFiles = git diff --name-only $before $after
+            }
+          }
+
+          $changedDb = $changedFiles | Where-Object { $_ -match '^manifests/(base|overlays/.*/overrides)/database.yaml$' }
+          $changedBackendManifest = $changedFiles | Where-Object { $_ -match '^manifests/(base|overlays/.*/overrides)/backend.yaml$' }
+          $changedFrontendManifest = $changedFiles | Where-Object { $_ -match '^manifests/(base|overlays/.*/overrides)/frontend.yaml$' }
+          $changedBackendCode = $changedFiles | Where-Object { $_ -match '^backend/' }
+          $changedFrontendCode = $changedFiles | Where-Object { $_ -match '^frontend/' }
+          $changedAny = $changedFiles | Where-Object { $_ -match '^(manifests/|backend/|frontend/)' }
+
+          $CHANGED_DB = @($changedDb).Count
+          $CHANGED_BACKEND = @($changedBackendManifest + $changedBackendCode).Count
+          $CHANGED_FRONTEND = @($changedFrontendManifest + $changedFrontendCode).Count
+          $CHANGED_ANY = @($changedAny).Count
+
+          "db=$CHANGED_DB" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "backend=$CHANGED_BACKEND" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "frontend=$CHANGED_FRONTEND" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "any=$CHANGED_ANY" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Deploy Namespace
+        if: steps.changes.outputs.any != '0'
+        run: |
+          kubectl apply -f manifests/base/namespace.yaml
+
+      - name: Deploy Manifests
+        if: steps.changes.outputs.any != '0'
+        run: |
+          kustomize edit set image my-backend=my-backend:${{ matrix.env }}
+          kustomize edit set image my-frontend=my-frontend:${{ matrix.env }}
+          kubectl apply -k .
+        working-directory: manifests/overlays/${{ matrix.env }}
+
+      - name: Deploy Database
+        if: steps.changes.outputs.db != '0'
+        run: |
+          kubectl rollout status statefulset/database --namespace=database
+
+      - name: Wait for DB readiness
+        if: steps.changes.outputs.db != '0'
+        run: |
+          kubectl wait --for=condition=ready pod -l app=database --namespace=database --timeout=300s
+
+      - name: Deploy Backend
+        if: steps.changes.outputs.backend != '0' || steps.changes.outputs.db != '0'
+        run: |
+          kubectl rollout status deployment/backend-deployment --namespace=backend
+
+      - name: Deploy Frontend
+        if: steps.changes.outputs.frontend != '0' || steps.changes.outputs.backend != '0'
+        run: |
+          kubectl rollout status deployment/frontend-deployment --namespace=frontend
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: Remove-Item -Path $HOME/.kube/config -Force -ErrorAction SilentlyContinue
