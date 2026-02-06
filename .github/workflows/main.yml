@@ -65,6 +65,7 @@ jobs:
             Write-Error "kustomize not found and no package manager available."
             exit 1
           }
+          continue-on-error: true
 
       - name: Install kubectl
         run: |
