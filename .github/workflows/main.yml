@@ -74,10 +74,26 @@ jobs:
           }
 
       - name: Configure kubeconfig
+        id: kubeconfig
         run: |
-          New-Item -ItemType Directory -Path $HOME/.kube -Force | Out-Null
+          $configPath = Join-Path $HOME ".kube\config"
+
+          if (Test-Path $configPath) {
+            $existing = Get-Content $configPath -Raw -ErrorAction SilentlyContinue
+            if (-not [string]::IsNullOrWhiteSpace($existing)) {
+              "created=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              return
+            }
+          }
+
+          New-Item -ItemType Directory -Path (Split-Path $configPath) -Force | Out-Null
           $content = "${{ secrets[matrix.kubeconfig_secret] }}"
-          Set-Content -Path $HOME/.kube/config -Value $content -NoNewline
+          if ([string]::IsNullOrWhiteSpace($content)) {
+            Write-Error "Kubeconfig secret is empty for ${env:matrix_env}."
+            exit 1
+          }
+          Set-Content -Path $configPath -Value $content -NoNewline
+          "created=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Detect changed services
         id: changes
@@ -148,5 +164,5 @@ jobs:
           kubectl rollout status deployment/frontend-deployment --namespace=frontend
 
       - name: Cleanup kubeconfig
-        if: always()
+        if: always() && steps.kubeconfig.outputs.created == 'true'
         run: Remove-Item -Path $HOME/.kube/config -Force -ErrorAction SilentlyContinue
