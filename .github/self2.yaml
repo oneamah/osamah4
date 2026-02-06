@@ -47,8 +47,18 @@ jobs:
             exit 1
           }
 
-      - name: Set up kustomize
-        uses: imranismail/setup-kustomize@v2
+      - name: Install kustomize
+        run: |
+          if (-not (Get-Command kustomize -ErrorAction SilentlyContinue)) {
+            if (Get-Command choco -ErrorAction SilentlyContinue) {
+              choco install kustomize -y
+            } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+              winget install --id Kubernetes.kustomize --accept-package-agreements --accept-source-agreements
+            } else {
+              Write-Error "kustomize not found and no package manager available."
+              exit 1
+            }
+          }
 
       - name: Set up kubectl
         uses: azure/setup-kubectl@v3
