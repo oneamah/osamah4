@@ -4,11 +4,21 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      environment:
+        description: Select environment to deploy
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
 
 jobs:
   deploy:
     runs-on: [self-hosted, osamah4]
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || matrix.env == github.event.inputs.environment)
 
     strategy:
       fail-fast: false
